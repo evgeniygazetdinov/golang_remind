@@ -1,5 +1,8 @@
-go mod init example.com/m;
+#!/bin/bash
+
+go mod init sql-trainer.com/m;
 go mod tidy;
 go install;
-go run main.go;
-# TODO ADD INSTALL POSTGRES IN CONTAINER
+
+echo "Все пакеты успешно установлены!"
+go run main.go middleware.go;

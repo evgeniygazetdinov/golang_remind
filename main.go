@@ -1,280 +1,143 @@
 package main
 
 import (
-    "database/sql"
-    "encoding/json"
-    "fmt"
-    "github.com/Syfaro/telegram-bot-api"
-    _ "github.com/lib/pq"
-    "io/ioutil"
-    "log"
-    "net/http"
-    "net/url"
-    "os"
-    "reflect"
-    "strings"
-    "time"
+	"encoding/json"
+	"log"
+	"net/http"
+	"os"
+
+	_ "sql-trainer-server/docs" // Этот импорт будет создан автоматически
+	"sql-trainer-server/internal/database"
+	"sql-trainer-server/internal/generator"
+
+	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
-type SearchResults struct {
-    ready   bool
-    Query   string
-    Results []Result
+var (
+	db            *database.Database
+	taskGenerator *generator.TaskGenerator
+)
+
+func init() {
+	// Загрузка переменных окружения из .env файла
+	if err := godotenv.Load(); err != nil {
+		log.Printf("Warning: .env file not found: %v", err)
+	}
+
+	// Инициализация базы данных
+	dbConfig := database.Config{
+		Host:     os.Getenv("DB_HOST"),
+		Port:     5432,
+		User:     os.Getenv("DB_USER"),
+		Password: os.Getenv("DB_PASSWORD"),
+		DBName:   os.Getenv("DB_NAME"),
+	}
+
+	var err error
+	db, err = database.NewDatabase(dbConfig)
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+
+	taskGenerator = generator.NewTaskGenerator(db)
 }
 
-type Result struct {
-    Name, Description, URL string
-}
-
-func (sr *SearchResults) UnmarshalJSON(bs []byte) error {
-    array := []interface{}{}
-    if err := json.Unmarshal(bs, &array); err != nil {
-        return err
-    }
-    sr.Query = array[0].(string)
-    for i := range array[1].([]interface{}) {
-        sr.Results = append(sr.Results, Result{
-            array[1].([]interface{})[i].(string),
-            array[2].([]interface{})[i].(string),
-            array[3].([]interface{})[i].(string),
-        })
-    }
-    return nil
-}
-
-func wikipediaAPI(request string) (answer []string) {
-
-    //Создаем срез на 3 элемента
-    s := make([]string, 3)
-
-    //Отправляем запрос
-    if response, err := http.Get(request); err != nil {
-        s[0] = "Wikipedia is not respond"
-    } else {
-        defer response.Body.Close()
-
-        //Считываем ответ
-        contents, err := ioutil.ReadAll(response.Body)
-        if err != nil {
-            log.Fatal(err)
-        }
-
-        //Отправляем данные в структуру
-        sr := &SearchResults{}
-        if err = json.Unmarshal([]byte(contents), sr); err != nil {
-            s[0] = "Something going wrong, try to change your question"
-        }
-
-        //Проверяем не пустая ли наша структура
-        if !sr.ready {
-            s[0] = "Something going wrong, try to change your question"
-        }
-
-        //Проходим через нашу структуру и отправляем данные в срез с ответом
-        for i := range sr.Results {
-            s[i] = sr.Results[i].URL
-        }
-    }
-
-    return s
-}
-
-//Конвертируем запрос для использование в качестве части URL
-func urlEncoded(str string) (string, error) {
-    u, err := url.Parse(str)
-    if err != nil {
-        return "", err
-    }
-    return u.String(), nil
-}
-
-var host = os.Getenv("HOST")
-var port = os.Getenv("PORT")
-var user = os.Getenv("USER")
-var password = os.Getenv("PASSWORD")
-var dbname = os.Getenv("DBNAME")
-var sslmode = os.Getenv("SSLMODE")
-
-var dbInfo = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s", host, port, user, password, dbname, sslmode)
-
-//Собираем данные полученные ботом
-func collectData(username string, chatid int64, message string, answer []string) error {
-
-    //Подключаемся к БД
-    db, err := sql.Open("postgres", dbInfo)
-    if err != nil {
-        return err
-    }
-    defer db.Close()
-
-    //Конвертируем срез с ответом в строку
-    answ := strings.Join(answer, ", ")
-
-    //Создаем SQL запрос
-    data := `INSERT INTO users(username, chat_id, message, answer) VALUES($1, $2, $3, $4);`
-
-    //Выполняем наш SQL запрос
-    if _, err = db.Exec(data, `@`+username, chatid, message, answ); err != nil {
-        return err
-    }
-
-    return nil
-}
-
-//Создаем таблицу users в БД при подключении к ней
-func createTable() error {
-
-    //Подключаемся к БД
-    db, err := sql.Open("postgres", dbInfo)
-    if err != nil {
-        return err
-    }
-    defer db.Close()
-
-    //Создаем таблицу users
-    if _, err = db.Exec(`CREATE TABLE users(ID SERIAL PRIMARY KEY, TIMESTAMP TIMESTAMP DEFAULT CURRENT_TIMESTAMP, USERNAME TEXT, CHAT_ID INT, MESSAGE TEXT, ANSWER TEXT);`); err != nil {
-        return err
-    }
-
-    return nil
-}
-
-func getNumberOfUsers() (int64, error) {
-
-    var count int64
-
-    //Подключаемся к БД
-    db, err := sql.Open("postgres", dbInfo)
-    if err != nil {
-        return 0, err
-    }
-    defer db.Close()
-
-    //Отправляем запрос в БД для подсчета числа уникальных пользователей
-    row := db.QueryRow("SELECT COUNT(DISTINCT username) FROM users;")
-    err = row.Scan(&count)
-    if err != nil {
-        return 0, err
-    }
-
-    return count, nil
-}
-
-func telegramBot() {
-
-    //Создаем бота
-    bot, err := tgbotapi.NewBotAPI(os.Getenv("TOKEN"))
-    if err != nil {
-        panic(err)
-    }
-
-    //Устанавливаем время обновления
-    u := tgbotapi.NewUpdate(0)
-    u.Timeout = 60
-
-    //Получаем обновления от бота 
-    updates, err := bot.GetUpdatesChan(u)
-
-    for update := range updates {
-        if update.Message == nil {
-            continue
-        }
-
-        //Проверяем что от пользователья пришло именно текстовое сообщение
-        if reflect.TypeOf(update.Message.Text).Kind() == reflect.String && update.Message.Text != "" {
-
-            switch update.Message.Text {
-            case "/start":
-
-                //Отправлем сообщение
-                msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Hi, i'm a wikipedia bot, i can search information in a wikipedia, send me something what you want find in Wikipedia.")
-                bot.Send(msg)
-
-            case "/number_of_users":
-
-                if os.Getenv("DB_SWITCH") == "on" {
-
-                    //Присваиваем количество пользоватьелей использовавших бота в num переменную
-                    num, err := getNumberOfUsers()
-                    if err != nil {
-
-                        //Отправлем сообщение
-                        msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Database error.")
-                        bot.Send(msg)
-                    }
-
-                    //Создаем строку которая содержит колличество пользователей использовавших бота
-                    ans := fmt.Sprintf("%d peoples used me for search information in Wikipedia", num)
-
-                    //Отправлем сообщение
-                    msg := tgbotapi.NewMessage(update.Message.Chat.ID, ans)
-                    bot.Send(msg)
-                } else {
-
-                    //Отправлем сообщение
-                    msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Database not connected, so i can't say you how many peoples used me.")
-                    bot.Send(msg)
-                }
-            default:
-
-                //Устанавливаем язык для поиска в википедии
-                language := os.Getenv("LANGUAGE")
-
-                //Создаем url для поиска
-                ms, _ := urlEncoded(update.Message.Text)
-
-                url := ms
-                request := "https://" + language + ".wikipedia.org/w/api.php?action=opensearch&search=" + url + "&limit=3&origin=*&format=json"
-
-                //Присваем данные среза с ответом в переменную message
-                message := wikipediaAPI(request)
-
-                if os.Getenv("DB_SWITCH") == "on" {
-
-                    //Отправляем username, chat_id, message, answer в БД
-                    if err := collectData(update.Message.Chat.UserName, update.Message.Chat.ID, update.Message.Text, message); err != nil {
-
-                        //Отправлем сообщение
-                        msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Database error, but bot still working.")
-                        bot.Send(msg)
-                    }
-                }
-
-                //Проходим через срез и отправляем каждый элемент пользователю
-                for _, val := range message {
-
-                    //Отправлем сообщение
-                    msg := tgbotapi.NewMessage(update.Message.Chat.ID, val)
-                    bot.Send(msg)
-                }
-            }
-        } else {
-
-            //Отправлем сообщение
-            msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Use the words for search.")
-            bot.Send(msg)
-        }
-    }
-}
-
+// @title SQL Trainer API
+// @version 1.0
+// @description API для тренировки SQL запросов
+// @host localhost:8080
+// @BasePath /api
 func main() {
+	r := mux.NewRouter()
 
-    // time.Sleep(1 * time.Minute)
+	// // Применяем CORS middleware
+	r.Use(corsMiddleware)
+	r.Use(loggingMiddleware)
 
-    //Создаем таблицу
-    if os.Getenv("CREATE_TABLE") == "yes" {
+	// Swagger
+	r.PathPrefix("/swagger/").Handler(httpSwagger.Handler(
+		httpSwagger.URL("/swagger/doc.json"),
+		httpSwagger.DeepLinking(true),
+		httpSwagger.DocExpansion("none"),
+		httpSwagger.DomID("swagger-ui"),
+	))
 
-        if os.Getenv("DB_SWITCH") == "on" {
+	// Определяем маршруты
+	api := r.PathPrefix("/api").Subrouter()
+	api.HandleFunc("/generate-task", generateTaskHandler).Methods("GET", "OPTIONS")
+	api.HandleFunc("/check-solution", checkSolutionHandler).Methods("POST", "OPTIONS")
+	api.HandleFunc("/health", healthCheckHandler).Methods("GET")
 
-            if err := createTable(); err != nil {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 
-                panic(err)
-            }
-        }
-    }
+	log.Printf("Starting server on http://0.0.0.0:%s", port)
+	log.Printf("Swagger UI available at http://0.0.0.0:%s/swagger/index.html", port)
+	if err := http.ListenAndServe(":"+port, r); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
+}
 
-    time.Sleep(1 * time.Minute)
+// @Summary Генерация нового задания
+// @Description Создает новую случайную таблицу и генерирует задание для неё
+// @Tags tasks
+// @Produce json
+// @Success 200 {object} generator.Task
+// @Router /generate-task [get]
+func generateTaskHandler(w http.ResponseWriter, r *http.Request) {
+	task, err := taskGenerator.GenerateTask()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-    //Вызываем бота
-    telegramBot()
+	json.NewEncoder(w).Encode(task)
+}
+
+// @Summary Проверка решения
+// @Description Проверяет правильность SQL запроса для заданного задания
+// @Tags tasks
+// @Accept json
+// @Produce json
+// @Param solution body CheckSolutionRequest true "Решение задания"
+// @Success 200 {object} CheckSolutionResponse
+// @Router /check-solution [post]
+func checkSolutionHandler(w http.ResponseWriter, r *http.Request) {
+	var solution CheckSolutionRequest
+	if err := json.NewDecoder(r.Body).Decode(&solution); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// TODO: Проверка решения
+	w.WriteHeader(http.StatusOK)
+}
+
+// @Summary Проверка здоровья сервиса
+// @Description Возвращает статус работоспособности сервиса
+// @Tags system
+// @Produce json
+// @Success 200 {object} HealthCheckResponse
+// @Router /health [get]
+func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(HealthCheckResponse{Status: "ok"})
+}
+
+// Структуры для документации API
+type CheckSolutionRequest struct {
+	TaskID string `json:"task_id" example:"task_1234567890"`
+	Query  string `json:"query" example:"SELECT * FROM employees WHERE salary > 50000"`
+}
+
+type CheckSolutionResponse struct {
+	Correct bool   `json:"correct" example:"true"`
+	Message string `json:"message,omitempty" example:"Решение верное!"`
+}
+
+type HealthCheckResponse struct {
+	Status string `json:"status" example:"ok"`
 }
