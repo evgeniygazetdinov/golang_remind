@@ -289,18 +289,18 @@ import (
 const URL string = "https://dummyjson.com/products/1"
 
 type Result struct {
-	Id, Title, URL string
+	Id, Title, Description string
 }
 
-func checkTempature() (answer []string) {
+func checkTempature() (answer []Result) {
 
 	//Создаем срез на 3 элемента
-	s := make([]string, 3)
+	var s []Result
 
 	//Отправляем запрос
 
 	if response, err := http.Get(URL); err != nil {
-		s[0] = "Wikipedia is not respond"
+		fmt.Println(err)
 
 	} else {
 		defer response.Body.Close()
@@ -312,22 +312,17 @@ func checkTempature() (answer []string) {
 		}
 
 		//Отправляем данные в структуру
-		sr := Result
+		sr := &Result{}
 		if err = json.Unmarshal([]byte(contents), sr); err != nil {
-			s[0] = "Something going wrong, try to change your question"
+			fmt.Println(err)
 		}
-
+		fmt.Println(sr.Description)
+		fmt.Println(sr)
+		s = append(s, *sr)
 		//Проверяем не пустая ли наша структура
-		if !sr.ready {
-			s[0] = "Something going wrong, try to change your question"
-		}
 
 		//Проходим через нашу структуру и отправляем данные в срез с ответом
-		for i := range sr.Results {
-			s[i] = sr.Results[i].URL
-		}
 	}
-	fmt.Println(s)
 	return s
 }
 
@@ -365,8 +360,7 @@ func main() {
 			msg.Text = "I understand /sayhi and /status."
 
 		case "check":
-			msg.Text = "Hi :)"
-			checkTempature()
+			msg.Text = checkTempature()[0].Title
 		case "status":
 			msg.Text = "I'm ok."
 		default:
