@@ -277,10 +277,59 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
+
+const URL string = "https://dummyjson.com/products/1"
+
+type Result struct {
+	Id, Title, URL string
+}
+
+func checkTempature() (answer []string) {
+
+	//Создаем срез на 3 элемента
+	s := make([]string, 3)
+
+	//Отправляем запрос
+
+	if response, err := http.Get(URL); err != nil {
+		s[0] = "Wikipedia is not respond"
+
+	} else {
+		defer response.Body.Close()
+
+		//Считываем ответ
+		contents, err := ioutil.ReadAll(response.Body)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		//Отправляем данные в структуру
+		sr := Result
+		if err = json.Unmarshal([]byte(contents), sr); err != nil {
+			s[0] = "Something going wrong, try to change your question"
+		}
+
+		//Проверяем не пустая ли наша структура
+		if !sr.ready {
+			s[0] = "Something going wrong, try to change your question"
+		}
+
+		//Проходим через нашу структуру и отправляем данные в срез с ответом
+		for i := range sr.Results {
+			s[i] = sr.Results[i].URL
+		}
+	}
+	fmt.Println(s)
+	return s
+}
 
 func main() {
 	bot, err := tgbotapi.NewBotAPI("847457006:AAE5aQ6zLsqCwDKqVeq2Ktg8kuKMMHcAXhI")
@@ -314,8 +363,10 @@ func main() {
 		switch update.Message.Command() {
 		case "help":
 			msg.Text = "I understand /sayhi and /status."
-		case "sayhi":
+
+		case "check":
 			msg.Text = "Hi :)"
+			checkTempature()
 		case "status":
 			msg.Text = "I'm ok."
 		default:
