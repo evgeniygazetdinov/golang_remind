@@ -286,30 +286,32 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-const URL string = "https://dummyjson.com/products/1"
+const URL string = "http://192.168.0.108"
 
 type Result struct {
-	Id, Title, Description string
+	Temp string `json:'temp'`
 }
 
-func checkTempature() (answer []Result) {
-	var s []Result
+func checkTempature() (answer string) {
+	sr := Result{}
 	if response, err := http.Get(URL); err != nil {
 		fmt.Println(err)
-
 	} else {
 		defer response.Body.Close()
 		contents, err := ioutil.ReadAll(response.Body)
+		fmt.Println("here !!!!!!!!!!!!!!!!!!!!!!!!")
+		fmt.Println(contents)
 		if err != nil {
 			log.Fatal(err)
 		}
-		sr := &Result{}
-		if err = json.Unmarshal([]byte(contents), sr); err != nil {
+
+		if err = json.Unmarshal([]byte(contents), &sr); err != nil {
 			fmt.Println(err)
+			fmt.Println("here error")
 		}
-		s = append(s, *sr)
 	}
-	return s
+	fmt.Println("here !!!!!!!!!!!!!!!!!!!!!!!!")
+	return sr.Temp
 }
 
 func main() {
@@ -337,7 +339,8 @@ func main() {
 		// Extract the command from the Message.
 		switch update.Message.Command() {
 		case "check":
-			msg.Text = checkTempature()[0].Title
+			fmt.Println()
+			msg.Text = checkTempature()
 		default:
 			msg.Text = "I don't know that command"
 		}
