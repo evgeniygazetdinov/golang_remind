@@ -12,7 +12,7 @@ ESP8266WebServer server(80);
 
 //wifi settings
 const char* ssid = "TP-Link_AB03"; //Use your own SSID
-const char* password =  "21102022Va";  //Use your own Passoword
+const char* password =  "";  //Use your own Passoword
 
 void setup(void)
 {
